@@ -320,6 +320,15 @@ impl Player {
         Ok(())
     }
 
+    /// Seek to a position in the current track (in milliseconds)
+    pub async fn seek(&self, group_id: &GroupId, position_millis: u32) -> Result<()> {
+        let conn = self.require_connection().await?;
+        let header = RequestHeader::group("playback", "seek", &self.household_id, group_id);
+        let body = serde_json::json!({ "positionMillis": position_millis });
+        conn.send_command(header, body).await?;
+        Ok(())
+    }
+
     /// Toggle play/pause based on current state
     pub async fn toggle_play_pause(&self, group_id: &GroupId) -> Result<()> {
         let conn = self.require_connection().await?;
