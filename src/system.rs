@@ -81,7 +81,6 @@ impl SonosSystem {
             .map(|p| p.txt_mhhid.clone())
             .unwrap_or_default();
 
-        // Connect to first player for topology subscription
         let first = &discovered[0];
         let hostname = first.hostname.trim_end_matches('.').to_string();
         let ws_path = if first.txt_wss.is_empty() {
@@ -90,10 +89,18 @@ impl SonosSystem {
             first.txt_wss.clone()
         };
 
+        let connect_host = first
+            .addresses
+            .iter()
+            .map(|a| a.to_ip_addr())
+            .find(|ip| ip.is_ipv4())
+            .map(|ip| ip.to_string());
+
         info!("Connecting to {} for topology subscription", first.name);
 
-        let topology_connection = PlayerConnection::with_config(
+        let topology_connection = PlayerConnection::with_config_addr(
             &hostname,
+            connect_host,
             first.txt_sslport,
             &ws_path,
             ConnectionConfig::default(),

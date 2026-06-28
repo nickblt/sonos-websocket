@@ -74,8 +74,10 @@ impl Default for ConnectionConfig {
 /// This type is cheaply cloneable - clones share the same underlying connection.
 #[derive(Clone)]
 pub struct PlayerConnection {
-    /// Player hostname (e.g., "Sonos-XXXX.local")
+    /// Player hostname (e.g., "Sonos-XXXX.local"); used as the TLS server name
     hostname: String,
+    /// Optional address to dial instead of resolving `hostname` (e.g. a discovered IP)
+    connect_host: Option<String>,
     /// Player port (typically 1443)
     port: u16,
     /// WebSocket path (typically "/websocket/api")
@@ -102,10 +104,24 @@ impl PlayerConnection {
 
     /// Create a new player connection with custom configuration
     pub fn with_config(hostname: &str, port: u16, ws_path: &str, config: ConnectionConfig) -> Self {
+        Self::with_config_addr(hostname, None, port, ws_path, config)
+    }
+
+    /// Create a new player connection that dials `connect_host` (e.g. a
+    /// discovered IP) while still using `hostname` as the TLS server name.
+    /// Pass `None` for `connect_host` to resolve `hostname` directly.
+    pub fn with_config_addr(
+        hostname: &str,
+        connect_host: Option<String>,
+        port: u16,
+        ws_path: &str,
+        config: ConnectionConfig,
+    ) -> Self {
         let (event_tx, _) = broadcast::channel(64);
 
         Self {
             hostname: hostname.to_string(),
+            connect_host,
             port,
             ws_path: ws_path.to_string(),
             config,
@@ -256,6 +272,7 @@ impl PlayerConnection {
     fn clone_internals(&self) -> ConnectionInternals {
         ConnectionInternals {
             hostname: self.hostname.clone(),
+            connect_host: self.connect_host.clone(),
             port: self.port,
             ws_path: self.ws_path.clone(),
             config: self.config.clone(),
@@ -270,6 +287,7 @@ impl PlayerConnection {
 /// Internal state passed to the connection task
 struct ConnectionInternals {
     hostname: String,
+    connect_host: Option<String>,
     port: u16,
     ws_path: String,
     config: ConnectionConfig,
@@ -319,7 +337,14 @@ async fn connection_task(conn: ConnectionInternals) {
         attempt += 1;
 
         // Attempt connection
-        match establish_connection(&conn.hostname, conn.port, &conn.ws_path).await {
+        match establish_connection(
+            &conn.hostname,
+            conn.connect_host.as_deref(),
+            conn.port,
+            &conn.ws_path,
+        )
+        .await
+        {
             Ok((writer, reader)) => {
                 info!("Connected to {}", conn.hostname);
                 attempt = 0; // Reset attempt counter on successful connection
@@ -359,22 +384,24 @@ async fn connection_task(conn: ConnectionInternals) {
     }
 }
 
-/// Establish TLS + WebSocket connection
+/// Establish TLS + WebSocket connection.
+///
+/// Dials `connect_host` when provided (e.g. a discovered IP), otherwise resolves
+/// `hostname`. `hostname` is always used for the TLS server name and the
+/// WebSocket `Host` header so Sonos certificate verification still succeeds.
 async fn establish_connection(
     hostname: &str,
+    connect_host: Option<&str>,
     port: u16,
     ws_path: &str,
 ) -> Result<(WsWriter, WsReader)> {
-    // Connect with TLS
-    let tls_stream = tls::connect_tls(hostname, port).await?;
+    let tls_stream = tls::connect_tls_to(connect_host.unwrap_or(hostname), hostname, port).await?;
 
-    // Build WebSocket request
     let ws_url = format!("wss://{}:{}{}", hostname, port, ws_path);
     debug!("WebSocket handshake to {}", ws_url);
 
     let mut request = ws_url.into_client_request()?;
 
-    // Add required headers
     request.headers_mut().insert(
         "Sec-WebSocket-Protocol",
         HeaderValue::from_static(WEBSOCKET_PROTOCOL),
@@ -383,10 +410,8 @@ async fn establish_connection(
         .headers_mut()
         .insert("X-Sonos-Api-Key", HeaderValue::from_static(API_KEY));
 
-    // Perform WebSocket handshake
     let (ws_stream, _response) = tokio_tungstenite::client_async(request, tls_stream).await?;
 
-    // Split into read/write
     let (writer, reader) = ws_stream.split();
 
     Ok((writer, reader))

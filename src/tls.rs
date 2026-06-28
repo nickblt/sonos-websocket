@@ -34,14 +34,25 @@ pub fn create_tls_connector() -> Result<TlsConnector> {
 ///
 /// The hostname should be the .local mDNS hostname (e.g., "Sonos-XXXX.local").
 pub async fn connect_tls(hostname: &str, port: u16) -> Result<TlsStream<TcpStream>> {
+    connect_tls_to(hostname, hostname, port).await
+}
+
+/// Connects to `connect_host` (which may be a raw IP) while validating the TLS
+/// certificate against `server_name` (the `.local` hostname Sonos issues its
+/// device certificates for). This lets callers dial a discovered IP on networks
+/// that cannot resolve `.local` mDNS names, without breaking cert verification.
+pub async fn connect_tls_to(
+    connect_host: &str,
+    server_name: &str,
+    port: u16,
+) -> Result<TlsStream<TcpStream>> {
     let connector = create_tls_connector()?;
 
-    let addr = format!("{}:{}", hostname, port);
+    let addr = format!("{}:{}", connect_host, port);
     let stream = TcpStream::connect(&addr).await?;
 
-    // Strip trailing dot if present (DNS standard format)
-    let hostname_clean = hostname.trim_end_matches('.');
-    let server_name = ServerName::try_from(hostname_clean.to_string())?;
+    let name_clean = server_name.trim_end_matches('.');
+    let server_name = ServerName::try_from(name_clean.to_string())?;
 
     let tls_stream = connector.connect(server_name, stream).await?;
 

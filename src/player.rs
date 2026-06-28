@@ -87,19 +87,31 @@ impl Player {
             return Ok(());
         }
 
-        // Parse websocket URL for port and path, but use .local hostname for TLS
-        let (_ip_host, port, path) = Self::parse_websocket_url(&self.websocket_url)?;
+        let (url_host, port, path) = Self::parse_websocket_url(&self.websocket_url)?;
 
-        // Derive hostname from player ID: RINCON_38420B91F87E01400 -> Sonos-38420B91F87E.local
         let hostname = Self::derive_hostname(&self.id)?;
 
+        let connect_host = url_host
+            .parse::<std::net::IpAddr>()
+            .ok()
+            .map(|_| url_host.clone());
+
         debug!(
-            "Connecting to player {} at {}:{}{}",
-            self.id, hostname, port, path
+            "Connecting to player {} at {} (tls {}):{}{}",
+            self.id,
+            connect_host.as_deref().unwrap_or(hostname.as_str()),
+            hostname,
+            port,
+            path
         );
 
-        let conn =
-            PlayerConnection::with_config(&hostname, port, &path, ConnectionConfig::default());
+        let conn = PlayerConnection::with_config_addr(
+            &hostname,
+            connect_host,
+            port,
+            &path,
+            ConnectionConfig::default(),
+        );
 
         conn.connect().await?;
 
